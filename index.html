@@ -1,0 +1,900 @@
+<!--
+  Watch Time Calculator (bug salad) — Open-source
+  ===============================================
+  Single-file app: computes total watch time and projected end date/time in the user's
+  local time zone. Features: optional second show, 12/24 hr mode, light/dark theme,
+  About modal, and minute-aligned clock updates (no setInterval drift).
+  Optimizations: singular/plural labels, omit zero units, robust parsing/clamping.
+
+  Source: https://github.com/bug-salad/watch-time-calculator
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" href="https://imgur.com/qqbsLds.png">
+  <meta property="og:image" content="https://imgur.com/irvwtlw.png">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Watch Time Calculator</title>
+  <style>
+    /* ========== Reset & base ========== */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* Dark theme (default) */
+    :root {
+      color-scheme: dark;
+      --bg: #000;
+      --fg: #e0e0e0;
+      --muted: #ccc;
+      --muted2: #aaa;
+      --panel: transparent;
+      --input-bg: #2b2b2b;
+      --input-border: #3a3a3a;
+      --focus: #fff;
+      --focusRing: rgba(255,255,255,0.3);
+      --title: #fff;
+      --about-bg: rgba(255,255,255,0.06);
+      --about-border: rgba(255,255,255,0.14);
+      --toast-bg: rgba(35,35,35,0.96);
+      --toast-fg: #fff;
+    }
+
+    /* Light theme */
+    body.theme-light {
+      color-scheme: light;
+      --bg: #f7f7f8;
+      --fg: #121212;
+      --muted: #2f2f2f;
+      --muted2: #555;
+      --panel: transparent;
+      --input-bg: #fff;
+      --input-border: #d0d0d0;
+      --focus: #111;
+      --focusRing: rgba(0,0,0,0.18);
+      --title: #111;
+      --about-bg: rgba(0,0,0,0.04);
+      --about-border: rgba(0,0,0,0.12);
+      --toast-bg: rgba(20,20,20,0.92);
+      --toast-fg: #fff;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    /* Scroll: body only (fixes Android Google Chrome 1-finger scroll), scrollbars hidden */
+    html { overflow: hidden; }
+    body {
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y;
+
+      /* Hide scrollbars while still allowing scroll */
+      -ms-overflow-style: none;     /* IE/Edge legacy */
+      scrollbar-width: none;
+      overflow: -moz-scrollbars-none;
+
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 0;
+    }
+    /* Hide scrollbar in all browsers */
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar,
+    *::-webkit-scrollbar {
+      display: none !important;
+      width: 0 !important;
+      height: 0 !important;
+      background: transparent !important;
+      -webkit-appearance: none !important;
+      appearance: none !important;
+    }
+    html { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* ========== Calculator layout ========== */
+    .calculator {
+      transform: scale(1.5);
+      transform-origin: center;
+      background: var(--panel);
+      border-radius: 0;
+      box-shadow: none;
+      padding: 30px 40px;
+      display: inline-block;
+      /* Keep layout width stable when About toggles */
+      width: min(480px, calc(100vw - 32px));
+    }
+
+    /* Center the form section */
+    .form-section {
+      width: 100%;
+      max-width: 400px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    h1 {
+      text-align: center;
+      color: var(--title);
+      margin-bottom: 22px;
+      font-size: 1.5rem;
+      height: 1.5em;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Title + Easter egg (5 taps → crumble + redirect) */
+    .easter-egg-trigger {
+      cursor: pointer;
+      position: relative;
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      touch-action: manipulation;                /* reduce double-tap zoom behavior */
+      -webkit-tap-highlight-color: transparent;  /* remove Android tap highlight */
+    }
+    .easter-egg-trigger.crumble {
+      animation: crumble 0.8s forwards;
+    }
+    @keyframes crumble {
+      0% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+        filter: none;
+      }
+      40% {
+        transform: translateY(-4px) scale(1.05);
+      }
+      100% {
+        opacity: 0;
+        transform: translateY(20px) scale(0.9) rotate(3deg);
+        filter: blur(3px);
+      }
+    }
+
+    /* Top controls (About, theme, 12/24 HR — desktop: fixed top-left; mobile: under title) */
+    .top-controls {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      margin-bottom: 14px;
+      flex-wrap: wrap;
+      /* Desktop: pin to upper-left corner of browser */
+      position: fixed;
+      top: 0;
+      left: 0;
+      padding: 12px 16px;
+      z-index: 10;
+    }
+
+    .icon-button {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--fg);
+      padding: 6px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.05s, opacity 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .icon-button:hover { opacity: 0.9; }
+    .icon-button:active { transform: translateY(1px); }
+    .icon-button:focus {
+      outline: none;
+      box-shadow: none;
+    }
+    .icon-button svg {
+      width: 18px;
+      height: 18px;
+      display: none;
+    }
+    /* About icon: always show (no theme-based hide) */
+    .icon-button .icon-about {
+      display: block;
+    }
+    body.theme-light .icon-sun { display: block; }
+    body:not(.theme-light) .icon-moon { display: block; }
+
+    .icon-clock-12,
+    .icon-clock-24 {
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0.03em;
+      display: none;
+    }
+    body.clock-24 .icon-clock-24 { display: inline-block; }
+    body.clock-24 .icon-clock-12 { display: none; }
+    body:not(.clock-24) .icon-clock-12 { display: inline-block; }
+
+    .link-button {
+      appearance: none;
+      border: none;
+      background: transparent;
+      color: var(--fg);
+      padding: 6px;
+      border-radius: 0;
+      cursor: pointer;
+      font-size: 0.9rem;
+      line-height: 1;
+      transition: opacity 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .link-button:active { transform: none; }
+    .link-button:focus {
+      outline: none;
+      box-shadow: none;
+    }
+
+    /* ========== About modal ========== */
+    .about-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.25);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 9998;
+    }
+    .about-backdrop.visible { display: block; }
+
+    /* Modal dialog (centered, backdrop blurs page) */
+    .about {
+      display: none;
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      padding: 14px 16px;
+      width: min(360px, calc(100vw - 32px));
+      max-width: 90vw;
+      background: var(--about-bg);
+      border: 1px solid var(--about-border);
+      border-radius: 10px;
+      color: var(--muted2);
+      font-size: 0.9rem;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      z-index: 9999;
+    }
+    .about.visible { display: block; }
+    .about p { margin: 0 0 0.5em 0; }
+    .about p:last-child { margin-bottom: 0; }
+    .about strong { color: var(--fg); font-weight: 600; }
+    .about-source { margin-top: 0.75em; }
+    .about a { color: var(--fg); text-decoration: underline; text-underline-offset: 2px; }
+    .about a:hover { opacity: 0.85; }
+
+    /* ========== Form layout ========== */
+    .row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 18px;
+    }
+    label {
+      flex: 0 0 80px;
+      color: var(--muted);
+      margin-right: 12px;
+      font-weight: 500;
+    }
+    .input-group {
+      display: flex;
+      align-items: center;
+      flex: 1;
+      position: relative;
+      gap: 8px;
+    }
+    .input-group.stack {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 6px;
+      width: 100%;
+    }
+    .input-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      flex-wrap: wrap;
+    }
+    .hint-inline {
+      color: var(--muted2);
+      font-size: 0.8rem;
+      max-width: 140px;
+      display: inline-block;
+    }
+    .hint-inline.total-hint {
+      max-width: 100%;
+    }
+    .second-show-row {
+      display: none;
+    }
+    .second-show-row.visible { display: flex; }
+
+    /* ========== Inputs & outputs ========== */
+    input[type="number"],
+    input[type="text"] {
+      padding: 8px 10px;
+      font-size: 1rem;
+      border: 1px solid var(--input-border);
+      border-radius: 6px;
+      background: var(--input-bg);
+      color: var(--fg);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input[type="number"] {
+      width: 8ch;
+    }
+    input[readonly] {
+      opacity: 0.95;
+    }
+
+    /* Units */
+    .unit {
+      margin-right: 12px;
+      color: var(--muted2);
+      flex: 0 0 auto;
+      font-size: 0.9rem;
+    }
+
+    /* Output styling */
+    #output, #endTime, #endDate {
+      text-align: center;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    #endTime { flex: 0 0 auto; width: 12ch; }
+    #endDate { flex: 0 0 auto; width: 11ch; }
+
+    /* Input focus ring */
+    input:focus {
+      outline: none;
+      border-color: var(--focus);
+      box-shadow: 0 0 0 2px var(--focusRing);
+    }
+
+    /* Android-style toast (bottom notification) */
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 16px;
+      transform: translateX(-50%) translateY(16px);
+      background: var(--toast-bg);
+      color: var(--toast-fg);
+      padding: 10px 14px;
+      border-radius: 22px;
+      font-size: 0.95rem;
+      max-width: min(560px, calc(100vw - 24px));
+      box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+      opacity: 0;
+      pointer-events: none;
+      z-index: 9999;
+      transition: opacity 180ms ease, transform 180ms ease;
+      text-align: center;
+      line-height: 1.25;
+    }
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ========== Responsive (mobile) ========== */
+    @media (max-width: 768px) {
+      .top-controls {
+        position: static;
+        margin-bottom: 14px;
+        padding: 0;
+        justify-content: center;
+      }
+      body {
+        align-items: flex-start;
+        justify-content: center;
+        padding: 16px;
+        height: 100%;
+        min-height: 100vh;
+      }
+      .calculator {
+        transform: none;
+        width: 100%;
+        max-width: 480px;
+        padding: 16px;
+      }
+      .form-section {
+        max-width: 100%;
+      }
+      .row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      label {
+        flex: 0 0 auto;
+        margin-right: 0;
+        margin-bottom: 4px;
+        text-align: left;
+      }
+      .input-group {
+        width: 100%;
+        flex-wrap: wrap;
+      }
+      input[type="number"],
+      input[type="text"] {
+        width: 100%;
+        max-width: 100%;
+        font-size: 0.95rem;
+      }
+      #endTime,
+      #endDate {
+        width: 100%;
+      }
+      .hint-inline {
+        max-width: 100%;
+      }
+      .toast {
+        bottom: 12px;
+        font-size: 0.92rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <!-- Main calculator (toggles may be moved to body on desktop by JS) -->
+  <div class="calculator" role="form" aria-label="Watch Time Calculator">
+    <h1 id="wtc-title" class="easter-egg-trigger">Watch Time Calculator</h1>
+
+    <!-- About, theme, 12/24 HR (desktop: fixed top-left; mobile: stays here under title) -->
+    <div class="top-controls" aria-label="App options">
+      <button
+        type="button"
+        id="aboutToggle"
+        class="icon-button"
+        aria-label="About this app"
+        aria-expanded="false"
+        aria-controls="aboutPanel"
+        title="About this app"
+      >
+        <!-- Info icon -->
+        <svg class="icon-about" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" />
+          <path d="M12 10v6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          <circle cx="12" cy="7" r="1.2" fill="currentColor" />
+        </svg>
+      </button>
+
+      <button type="button" id="themeToggle" class="icon-button" aria-label="Toggle light/dark mode" title="Toggle light/dark mode">
+        <!-- Sun (light mode) -->
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z" stroke="currentColor" stroke-width="2"/>
+          <path d="M12 2v2M12 20v2M4 12H2M22 12h-2M5.6 5.6 4.2 4.2M19.8 19.8l-1.4-1.4M18.4 5.6l1.4-1.4M4.2 19.8l1.4-1.4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <!-- Moon (dark mode) -->
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M21 14.7A8.5 8.5 0 0 1 9.3 3a7 7 0 1 0 11.7 11.7Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
+      <button
+        type="button"
+        id="clockToggle"
+        class="icon-button"
+        aria-label="Toggle 12/24 hour mode"
+        title="Toggle 12/24 hour mode"
+      >
+        <span class="icon-clock-12" aria-hidden="true">12HR</span>
+        <span class="icon-clock-24" aria-hidden="true">24HR</span>
+      </button>
+    </div>
+
+    <!-- Episode count, length, optional 2nd show, totals, end time/date -->
+    <div class="form-section">
+      <div class="row">
+        <label for="episodes">Episode(s)</label>
+        <div class="input-group">
+          <input type="number" id="episodes" min="0" step="1" value="0" inputmode="numeric" aria-label="Number of episodes" />
+          <span class="hint-inline">
+            To know the time from now, set Episode(s) to 1.
+          </span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="hours">Length</label>
+        <div class="input-group stack">
+          <div class="input-line">
+            <input type="number" id="hours" min="0" step="1" value="0" inputmode="numeric" aria-label="Hours per episode" />
+            <span class="unit" aria-hidden="true">hr(s)</span>
+            <input type="number" id="minutes" min="0" max="59" step="1" value="0" inputmode="numeric" aria-label="Minutes per episode (0–59)" />
+            <span class="unit" aria-hidden="true">min(s)</span>
+          </div>
+          <span id="show1TotalHint" class="hint-inline total-hint" style="display:none">0 hours 0 minutes</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="enableSecond"></label>
+        <div class="input-group">
+          <input type="checkbox" id="enableSecond" aria-label="Enable second show" title="Check this if you have a second show to add." />
+          <span class="hint-inline" title="Check this if you have a second show to add.">2nd Show?</span>
+        </div>
+      </div>
+
+      <div class="row second-show-row" id="secondShowEpisodesRow">
+        <label for="episodes2">Episode(s)</label>
+        <div class="input-group">
+          <input type="number" id="episodes2" min="0" step="1" value="0" inputmode="numeric" aria-label="Number of episodes for second show" />
+        </div>
+      </div>
+
+      <div class="row second-show-row" id="secondShowLengthRow">
+        <label for="hours2">Length</label>
+        <div class="input-group stack">
+          <div class="input-line">
+            <input type="number" id="hours2" min="0" step="1" value="0" inputmode="numeric" aria-label="Hours per episode for second show" />
+            <span class="unit" aria-hidden="true">hr(s)</span>
+            <input type="number" id="minutes2" min="0" max="59" step="1" value="0" inputmode="numeric" aria-label="Minutes per episode for second show (0–59)" />
+            <span class="unit" aria-hidden="true">min(s)</span>
+          </div>
+          <span id="show2TotalHint" class="hint-inline total-hint" style="display:none">0 hours 0 minutes</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="output">Total Time</label>
+        <div class="input-group">
+          <input type="text" id="output" readonly aria-live="polite" aria-label="Total watch time" />
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="endTime">Ends at</label>
+        <div class="input-group">
+          <input type="text" id="endTime" readonly aria-label="Projected end time" />
+          <input type="text" id="endDate" readonly aria-label="Projected end date" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast (Easter egg progress; bottom-center) -->
+  <div id="androidToast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- About modal: backdrop (blur) + dialog (outside .calculator so position:fixed uses viewport) -->
+  <div id="aboutBackdrop" class="about-backdrop" aria-hidden="true"></div>
+  <div id="aboutPanel" class="about" role="dialog" aria-modal="true" aria-label="About Watch Time Calculator">
+    <p>Enter episodes and per-episode length (hours/minutes). The app calculates your total watch time and the local time/date when you'll finish if you started right now.</p>
+    <p>Enable <strong>2nd Show</strong> to add a second show and see per-show totals.</p>
+    <p class="about-source">Open-source. <a id="aboutRepoLink" href="https://github.com/bug-salad/watch-time-calculator" target="_blank" rel="noopener noreferrer">View source on GitHub</a>.</p>
+  </div>
+
+  <script>
+    // Watch Time Calculator — init on DOM ready; single listener, no globals.
+    document.addEventListener('DOMContentLoaded', () => {
+      const DESKTOP_BP = 768; // px; matches CSS @media (max-width: 768px)
+
+      // ---------- DOM references ----------
+      const eps = document.getElementById('episodes');
+      const hrs = document.getElementById('hours');
+      const mins = document.getElementById('minutes');
+      const enableSecond = document.getElementById('enableSecond');
+      const eps2 = document.getElementById('episodes2');
+      const hrs2 = document.getElementById('hours2');
+      const mins2 = document.getElementById('minutes2');
+      const secondRows = document.querySelectorAll('.second-show-row');
+      const output = document.getElementById('output');
+      const show1TotalHint = document.getElementById('show1TotalHint');
+      const show2TotalHint = document.getElementById('show2TotalHint');
+      const endTime = document.getElementById('endTime');
+      const endDate = document.getElementById('endDate');
+      const title = document.getElementById('wtc-title');
+      const toast = document.getElementById('androidToast');
+      const aboutToggle = document.getElementById('aboutToggle');
+      const aboutPanel = document.getElementById('aboutPanel');
+      const aboutBackdrop = document.getElementById('aboutBackdrop');
+      const themeToggle = document.getElementById('themeToggle');
+      const clockToggle = document.getElementById('clockToggle');
+      const calculator = document.querySelector('.calculator');
+      const topControls = document.querySelector('.top-controls');
+
+      // ---------- Toggle placement (desktop: viewport top-left; mobile: under title) ----------
+      function relocateTopControls() {
+        if (!topControls || !calculator) return;
+        const isDesktop = window.innerWidth > DESKTOP_BP;
+        if (isDesktop && topControls.parentNode !== document.body) {
+          document.body.insertBefore(topControls, document.body.firstChild);
+        } else if (!isDesktop && topControls.parentNode !== calculator) {
+          const titleEl = document.getElementById('wtc-title');
+          if (titleEl && titleEl.nextSibling !== topControls) {
+            calculator.insertBefore(topControls, titleEl.nextSibling);
+          }
+        }
+      }
+
+      // ---------- Helpers ----------
+      const isCoarsePointer = () => {
+        try {
+          return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+        } catch {
+          return 'ontouchstart' in window;
+        }
+      };
+
+      let userTimeZone;
+      try {
+        userTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch (e) {
+        userTimeZone = undefined;
+      }
+
+      /** Parses value as integer; returns 0 if invalid. */
+      const toInt = (v) => {
+        const n = parseInt(v, 10);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      /** Clamps minutes input to 0–59 and updates the field if out of range. */
+      const clampMinutes = (input) => {
+        if (!input) return;
+        let m = toInt(input.value);
+        if (m < 0) m = 0;
+        if (m > 59) m = 59;
+        if (String(m) !== input.value) input.value = String(m);
+      };
+
+      /** Formats total minutes as "X hours Y minutes" (singular/plural, omits zero units). */
+      function formatMinutes(totalMinutes) {
+        const total = Math.max(0, toInt(String(totalMinutes)));
+        const h = Math.floor(total / 60);
+        const m = total % 60;
+        let parts = [];
+        if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+        if (m > 0) parts.push(`${m} ${m === 1 ? "minute" : "minutes"}`);
+        if (parts.length === 0) parts = ["0 hours 0 minutes"];
+        return parts.join(" ");
+      }
+
+      // ---------- Toast (bottom-center notification) ----------
+      let toastTimer = null;
+      function showToast(message) {
+        if (!toast) return;
+        toast.textContent = message;
+        toast.classList.add('visible');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          toast.classList.remove('visible');
+          toastTimer = null;
+        }, 1400);
+      }
+
+      // ---------- Second show visibility ----------
+      function updateSecondShowVisibility() {
+        const visible = enableSecond && enableSecond.checked;
+        secondRows.forEach(row => {
+          row.classList.toggle('visible', visible);
+        });
+        if (show1TotalHint) show1TotalHint.style.display = visible ? 'inline-block' : 'none';
+        if (show2TotalHint) show2TotalHint.style.display = visible ? 'inline-block' : 'none';
+        calculate();
+      }
+
+      // ---------- Core calculation (total time + projected end time/date) ----------
+      function calculate() {
+        clampMinutes(mins);
+        clampMinutes(mins2);
+
+        const perEpisode1 = toInt(hrs.value) * 60 + toInt(mins.value);
+        const perEpisode2 = toInt(hrs2.value) * 60 + toInt(mins2.value);
+
+        const total1 = toInt(eps.value) * perEpisode1;
+        const total2 = (enableSecond && enableSecond.checked) ? (toInt(eps2.value) * perEpisode2) : 0;
+        const total = total1 + total2;
+
+        if (enableSecond && enableSecond.checked) {
+          if (show1TotalHint) show1TotalHint.textContent = formatMinutes(total1);
+          if (show2TotalHint) show2TotalHint.textContent = formatMinutes(total2);
+        }
+
+        output.value = formatMinutes(total);
+
+        const end = new Date(Date.now() + total * 60000);
+        const use24 = clockFormat === '24';
+        const timeOptions = {
+          hour: use24 ? '2-digit' : 'numeric',
+          minute: '2-digit',
+          hour12: !use24
+        };
+        if (use24) {
+          timeOptions.hourCycle = 'h23';
+        } else {
+          timeOptions.hourCycle = 'h12';
+        }
+        const dateOptions = use24
+          ? { day: '2-digit', month: '2-digit', year: '2-digit' }
+          : { month: 'numeric', day: 'numeric', year: '2-digit' };
+        if (userTimeZone) {
+          timeOptions.timeZone = userTimeZone;
+          dateOptions.timeZone = userTimeZone;
+        }
+        const dateLocale = use24 ? 'en-GB' : 'en-US';
+
+        const timeFmt = new Intl.DateTimeFormat('en-US', timeOptions);
+        const dateFmt = new Intl.DateTimeFormat(dateLocale, dateOptions);
+        endTime.value = timeFmt.format(end);
+        endDate.value = dateFmt.format(end);
+      }
+
+      // ---------- About modal ----------
+      function setAboutOpen(open) {
+        if (!aboutPanel) return;
+        aboutPanel.classList.toggle('visible', open);
+        if (aboutBackdrop) {
+          aboutBackdrop.classList.toggle('visible', open);
+          aboutBackdrop.setAttribute('aria-hidden', open ? 'false' : 'true');
+        }
+        if (aboutToggle) aboutToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+      if (aboutToggle && aboutPanel) {
+        aboutToggle.addEventListener('click', () => {
+          setAboutOpen(!aboutPanel.classList.contains('visible'));
+        });
+      }
+      if (aboutBackdrop) {
+        aboutBackdrop.addEventListener('click', () => setAboutOpen(false));
+      }
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && aboutPanel && aboutPanel.classList.contains('visible')) {
+          setAboutOpen(false);
+        }
+      });
+
+      // ---------- Theme (light/dark, persisted) ----------
+      function applyTheme(mode) {
+        const isLight = mode === 'light';
+        document.body.classList.toggle('theme-light', isLight);
+        if (themeToggle) themeToggle.setAttribute('aria-pressed', isLight ? 'true' : 'false');
+      }
+      function initTheme() {
+        const saved = (() => {
+          try { return localStorage.getItem('wtc-theme'); } catch { return null; }
+        })();
+        if (saved === 'light' || saved === 'dark') {
+          applyTheme(saved);
+          return;
+        }
+        const prefersLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+        applyTheme(prefersLight ? 'light' : 'dark');
+      }
+      if (themeToggle) {
+        themeToggle.addEventListener('click', () => {
+          const mode = document.body.classList.contains('theme-light') ? 'dark' : 'light';
+          applyTheme(mode);
+          try { localStorage.setItem('wtc-theme', mode); } catch {}
+        });
+      }
+
+      // ---------- Clock format (12h / 24h, persisted) ----------
+      let clockFormat = '12';
+      function applyClockFormat(mode) {
+        clockFormat = mode === '24' ? '24' : '12';
+        document.body.classList.toggle('clock-24', clockFormat === '24');
+        if (clockToggle) clockToggle.setAttribute('aria-pressed', clockFormat === '24' ? 'true' : 'false');
+        calculate();
+      }
+      function initClockFormat() {
+        const savedClock = (() => {
+          try { return localStorage.getItem('wtc-clock'); } catch { return null; }
+        })();
+        if (savedClock === '12' || savedClock === '24') {
+          applyClockFormat(savedClock);
+          return;
+        }
+        let prefers24 = false;
+        try {
+          const fmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric' });
+          const opts = fmt.resolvedOptions();
+          prefers24 = opts.hour12 === false;
+        } catch {
+          prefers24 = false;
+        }
+        applyClockFormat(prefers24 ? '24' : '12');
+      }
+      if (clockToggle) {
+        clockToggle.addEventListener('click', () => {
+          const next = clockFormat === '24' ? '12' : '24';
+          applyClockFormat(next);
+          try { localStorage.setItem('wtc-clock', next); } catch {}
+        });
+      }
+
+      // ---------- Input listeners ----------
+      [eps, hrs, mins, eps2, hrs2, mins2].filter(Boolean).forEach(el => {
+        el.addEventListener('input', calculate, { passive: true });
+      });
+
+      if (enableSecond) {
+        enableSecond.addEventListener('change', updateSecondShowVisibility);
+      }
+
+      // ---------- Minute-aligned clock update (no setInterval drift) ----------
+      function scheduleMinuteTick() {
+        const now = Date.now();
+        const msToNextMinute = 60000 - (now % 60000);
+        setTimeout(() => {
+          calculate();
+          scheduleMinuteTick();
+        }, msToNextMinute);
+      }
+
+      // ---------- Easter egg (5 taps on title → crumble + redirect; toast at 3 remaining) ----------
+      const REQUIRED_TAPS = 5;
+      let eggTapCount = 0;
+      let eggTapTimer = null;
+      let eggUnlocked = false;
+
+      function resetEasterEggState() {
+        eggTapCount = 0;
+        eggUnlocked = false;
+        if (eggTapTimer) clearTimeout(eggTapTimer);
+        eggTapTimer = null;
+        if (title) title.classList.remove('crumble');
+      }
+
+      function onTitleActivateEasterEgg() {
+        if (!title) return;
+        if (eggUnlocked) return;
+
+        eggTapCount += 1;
+
+        const remaining = Math.max(0, REQUIRED_TAPS - eggTapCount);
+        const word = isCoarsePointer() ? 'tap' : 'click';
+        const plural = (n) => n === 1 ? word : `${word}s`;
+
+        if (remaining <= 3) {
+          if (remaining > 0) {
+            showToast(`You are now ${remaining} ${plural(remaining)} away from unlocking the Easter egg`);
+          } else {
+            showToast('Easter egg unlocked');
+          }
+        }
+
+        if (eggTapTimer) clearTimeout(eggTapTimer);
+        eggTapTimer = setTimeout(() => {
+          eggTapCount = 0;
+          eggTapTimer = null;
+        }, 1200); // window for multi-tap
+
+        if (eggTapCount >= REQUIRED_TAPS) {
+          eggUnlocked = true;
+          eggTapCount = 0;
+          title.classList.add('crumble');
+          setTimeout(() => {
+            window.location.href = 'https://myanimelist.net/animelist/bugsalad';
+          }, 850); // let the crumble animation play
+        }
+      }
+
+      if (title) {
+        title.addEventListener('click', onTitleActivateEasterEgg);
+      }
+
+      window.addEventListener('pageshow', () => resetEasterEggState());
+
+      // ---------- Init ----------
+      initTheme();
+      initClockFormat();
+      updateSecondShowVisibility(); // also calls calculate()
+      relocateTopControls();
+      window.addEventListener('resize', relocateTopControls);
+      scheduleMinuteTick();
+    });
+  </script>
+</body>
+</html>
