@@ -1,6 +1,6 @@
 # Watch Time Calculator
 
-**Open-source** single-file web app by [bug salad](https://bugsalad.net). Computes total watch time and projected end date/time in the user's local time zone.
+**Open-source** single-file web app that computes total watch time and projected end date/time in the user's local time zone.
 
 - **Live:** [bugsalad.net](https://bugsalad.net) (or your deployed URL)
 - **Source:** This repository — one HTML file, no build step.
