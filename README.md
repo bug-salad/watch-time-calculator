@@ -45,4 +45,4 @@ Open `index.html` in a browser, or serve the folder with any static server (e.g.
 
 ## License
 
-Use and modify freely. Attribution appreciated.
+This website and all of its code is **free to use** by anyone, for any purpose. Do whatever you want with it.

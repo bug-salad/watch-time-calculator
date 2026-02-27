@@ -1,5 +1,5 @@
 <!--
-  Watch Time Calculator (bug salad) — Open-source
+  Watch Time Calculator — This website and all of its code is free to use by anyone, for any purpose. Do whatever you want with it.
   ===============================================
   Single-file app: computes total watch time and projected end date/time in the user's
   local time zone. Features: optional second show, 12/24 hr mode, light/dark theme,
@@ -74,8 +74,9 @@
       touch-action: pan-y;
 
       /* Hide scrollbars while still allowing scroll */
-      -ms-overflow-style: none;
+      -ms-overflow-style: none;     /* IE/Edge legacy */
       scrollbar-width: none;
+      overflow: -moz-scrollbars-none;
 
       display: flex;
       align-items: center;
